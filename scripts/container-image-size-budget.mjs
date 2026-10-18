@@ -8,10 +8,10 @@ const mebibyte = 1024 * 1024;
 // dependency closure (scripts/prune-image-deps.mjs) instead of the whole
 // monorepo. Measured before pruning: core 1044 MiB, browser 1719 MiB,
 // cli 1386 MiB (linux/amd64). Targets: core <= 850 MiB, browser <= 1350 MiB,
-// cli <= 1000 MiB; budgets add a 50 MiB margin.
+// cli <= 1000 MiB.
 export const containerImageSizeBudgets = Object.freeze({
-  core: 900 * mebibyte,
-  browser: 1400 * mebibyte,
+  core: 850 * mebibyte,
+  browser: 1350 * mebibyte,
   cli: 1050 * mebibyte
 });
 
