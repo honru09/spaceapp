@@ -6,7 +6,7 @@ import { DEFAULT_MEMORY_CAMERA, memory3DVolumeRatio, projectMemoryPoint, type Me
 import {
   MAX_LABELS_3D,
   WEBGL_EDGE_FRAG, WEBGL_EDGE_VERT, WEBGL_NODE_FRAG, WEBGL_NODE_VERT, WEBGL_PICK_FRAG, WEBGL_PICK_VERT,
-  buildEdgeBuffers, buildNodeStyleBuffer, decodePickColor, orderLabelCandidates, truncateLabel
+  buildEdgeBuffers, buildNodeStyleBuffer, decodePickColor, edgeColorHex, hexToRgb, orderLabelCandidates, truncateLabel
 } from "./memory-graph-3d-webgl.js";
 import { GraphPerfRecorder, installGraphPerf } from "./memory-graph-perf.js";
 
@@ -49,6 +49,11 @@ type Engine = {
   deviceWidth: number; deviceHeight: number; cssWidth: number; cssHeight: number;
   degree: Map<string, number>;
   labelPriority: string[];
+  // #62: cached graph data for cheap focus-only updates and streaming edge refresh.
+  edgePairs: number[]; // flat [srcIdx, dstIdx, ...] for edges with both endpoints present
+  edgeList: MemoryGraphEdge[]; // edges matching edgePairs, in the same order
+  colors: Map<string, string>;
+  byId: Map<string, MemoryGraphNode>;
 };
 
 function compileShader(gl: WebGL2RenderingContext, type: number, source: string): WebGLShader {
@@ -151,7 +156,8 @@ function createEngine(canvas: HTMLCanvasElement): Engine | null {
       pickFbo, pickTex, pickDepth,
       order: [], indexOf: new Map(), nodeCount: 0, edgeCount: 0, edgeVertCount: 0,
       deviceWidth: 1, deviceHeight: 1, cssWidth: 1, cssHeight: 1,
-      degree: new Map(), labelPriority: []
+      degree: new Map(), labelPriority: [],
+      edgePairs: [], edgeList: [], colors: new Map(), byId: new Map()
     };
   } catch {
     return null;
@@ -187,22 +193,23 @@ function engineRebuildData(engine: Engine, nodes: MemoryGraphNode[], edges: Memo
     const p = coordinates.get(order[i]!);
     positions[i * 3] = p?.x ?? 0; positions[i * 3 + 1] = p?.y ?? 0; positions[i * 3 + 2] = p?.z ?? 0;
   }
-  const neighbors = new Set<string>();
-  if (focusId) for (const edge of edges) {
-    if (edge.source === focusId) neighbors.add(edge.target);
-    if (edge.target === focusId) neighbors.add(edge.source);
+  // Cache the valid edge endpoint pairs so streaming position updates can
+  // regenerate edge geometry without re-walking the edge list.
+  const edgePairs: number[] = [];
+  const edgeList: MemoryGraphEdge[] = [];
+  for (const edge of edges) {
+    const a = indexOf.get(edge.source);
+    const b = indexOf.get(edge.target);
+    if (a === undefined || b === undefined) continue;
+    edgePairs.push(a, b);
+    edgeList.push(edge);
   }
-  const style = buildNodeStyleBuffer(nodes, id => colors.get(id) ?? "#7395ad", focusId, neighbors);
   const edgeBufs = buildEdgeBuffers(edges, indexOf, positions, focusId);
 
   gl.bindBuffer(gl.ARRAY_BUFFER, engine.bufPos);
   gl.bufferData(gl.ARRAY_BUFFER, positions, gl.DYNAMIC_DRAW);
-  gl.bindBuffer(gl.ARRAY_BUFFER, engine.bufStyle);
-  gl.bufferData(gl.ARRAY_BUFFER, style, gl.DYNAMIC_DRAW);
   gl.bindBuffer(gl.ARRAY_BUFFER, engine.bufEdgePos);
   gl.bufferData(gl.ARRAY_BUFFER, edgeBufs.positions, gl.DYNAMIC_DRAW);
-  gl.bindBuffer(gl.ARRAY_BUFFER, engine.bufEdgeColor);
-  gl.bufferData(gl.ARRAY_BUFFER, edgeBufs.colors, gl.DYNAMIC_DRAW);
 
   const degree = new Map<string, number>();
   for (const edge of edges) {
@@ -221,9 +228,39 @@ function engineRebuildData(engine: Engine, nodes: MemoryGraphNode[], edges: Memo
   engine.nodeCount = order.length; engine.edgeCount = edges.length;
   engine.edgeVertCount = edgeBufs.count * 2;
   engine.degree = degree; engine.labelPriority = labelPriority;
+  engine.edgePairs = edgePairs; engine.edgeList = edgeList;
+  engine.colors = colors; engine.byId = new Map(nodes.map(n => [n.id, n]));
+  // Focus-dependent styling goes through the cheap path below.
+  engineUpdateFocus(engine, focusId);
 }
 
-/** Streaming layout chunks only move positions; styles/edges keep their buffers. */
+/**
+ * #62: hover/selection changes only rewrite the style and edge-color buffers.
+ * Everything else (positions, edge geometry, degrees, label priority, color
+ * map) depends on graph data alone and is left untouched.
+ */
+function engineUpdateFocus(engine: Engine, focusId: string | null) {
+  const { gl } = engine;
+  if (engine.nodeCount === 0) return;
+  const nodes = [...engine.byId.values()];
+  const neighbors = new Set<string>();
+  if (focusId) for (const edge of engine.edgeList) {
+    if (edge.source === focusId) neighbors.add(edge.target);
+    if (edge.target === focusId) neighbors.add(edge.source);
+  }
+  const style = buildNodeStyleBuffer(nodes, id => engine.colors.get(id) ?? "#7395ad", focusId, neighbors);
+  gl.bindBuffer(gl.ARRAY_BUFFER, engine.bufStyle);
+  gl.bufferData(gl.ARRAY_BUFFER, style, gl.DYNAMIC_DRAW);
+  const col = new Float32Array(engine.edgePairs.length * 3);
+  for (let i = 0; i < engine.edgeList.length; i++) {
+    const [r, g, b] = hexToRgb(edgeColorHex(engine.edgeList[i]!, focusId));
+    col.set([r, g, b, r, g, b], i * 6);
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER, engine.bufEdgeColor);
+  gl.bufferData(gl.ARRAY_BUFFER, col, gl.DYNAMIC_DRAW);
+}
+
+/** Streaming layout chunks only move positions; edge endpoints follow via cached pairs. */
 function engineUpdatePositions(engine: Engine, coordinates: Map<string, MemoryPoint3D>) {
   const { gl } = engine;
   const positions = new Float32Array(engine.order.length * 3);
@@ -233,6 +270,19 @@ function engineUpdatePositions(engine: Engine, coordinates: Map<string, MemoryPo
   }
   gl.bindBuffer(gl.ARRAY_BUFFER, engine.bufPos);
   gl.bufferData(gl.ARRAY_BUFFER, positions, gl.DYNAMIC_DRAW);
+  // #62: edges were baked at rebuild time; regenerate their endpoints so they
+  // track nodes while the layout streams.
+  const pairs = engine.edgePairs;
+  if (pairs.length > 0) {
+    const edgePos = new Float32Array(pairs.length * 3);
+    for (let i = 0; i < pairs.length; i += 2) {
+      const a = pairs[i]! * 3, b = pairs[i + 1]! * 3;
+      edgePos.set([positions[a]!, positions[a + 1]!, positions[a + 2]!], i * 3);
+      edgePos.set([positions[b]!, positions[b + 1]!, positions[b + 2]!], i * 3 + 3);
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, engine.bufEdgePos);
+    gl.bufferData(gl.ARRAY_BUFFER, edgePos, gl.DYNAMIC_DRAW);
+  }
 }
 
 function engineRender(engine: Engine, camera: MemoryCamera3D, scale: number, depthRange: number) {
@@ -244,15 +294,18 @@ function engineRender(engine: Engine, camera: MemoryCamera3D, scale: number, dep
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
   gl.enable(gl.DEPTH_TEST);
   gl.depthFunc(gl.LESS);
+  // #62: shaders work in CSS pixels (scale is CSS-based); the viewport still
+  // covers the full device-pixel drawing buffer.
+  const uw = engine.cssWidth, uh = engine.cssHeight;
   // Edges first, no depth write so nodes always win the depth test.
   gl.useProgram(engine.edge.program);
-  setCameraUniforms(gl, engine.edge, camera, scale, w, h, depthRange);
+  setCameraUniforms(gl, engine.edge, camera, scale, uw, uh, depthRange);
   gl.bindVertexArray(engine.vaoEdge);
   gl.depthMask(false);
   gl.drawArrays(gl.LINES, 0, engine.edgeVertCount);
   // Instanced node quads.
   gl.useProgram(engine.node.program);
-  setCameraUniforms(gl, engine.node, camera, scale, w, h, depthRange);
+  setCameraUniforms(gl, engine.node, camera, scale, uw, uh, depthRange);
   gl.bindVertexArray(engine.vaoNode);
   gl.enable(gl.BLEND);
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
@@ -278,7 +331,7 @@ function enginePick(engine: Engine, xCss: number, yCss: number, camera: MemoryCa
   gl.depthMask(true);
   gl.disable(gl.BLEND);
   gl.useProgram(engine.pick.program);
-  setCameraUniforms(gl, engine.pick, camera, scale, engine.deviceWidth, engine.deviceHeight, depthRange);
+  setCameraUniforms(gl, engine.pick, camera, scale, engine.cssWidth, engine.cssHeight, depthRange);
   gl.bindVertexArray(engine.vaoNode);
   gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, engine.nodeCount);
   gl.bindVertexArray(null);
@@ -314,6 +367,7 @@ function MemoryGraph3DWebGL({ nodes, edges, positions, coordinates, showTitles, 
     if (!engine) return;
     const { nodes, edges, coordinates, positions, selectedNodeId } = live.current;
     engineRebuildData(engine, nodes, edges, coordinates, positionsToColors(positions), selectedNodeId);
+    perfRef.current?.configure("webgl2", nodes.length, edges.length);
     scheduleRef.current();
   }, [nodes, edges, positions]);
 
@@ -369,7 +423,7 @@ function MemoryGraph3DWebGL({ nodes, edges, positions, coordinates, showTitles, 
     const render = () => {
       frame = 0;
       if (disposed || !engine) return;
-      const { nodes, edges, coordinates, positions, selectedNodeId } = live.current;
+      const { selectedNodeId } = live.current;
       const rect = canvas.getBoundingClientRect();
       const cssW = Math.max(1, rect.width), cssH = Math.max(1, rect.height);
       engineResize(engine, cssW, cssH);
@@ -386,12 +440,14 @@ function MemoryGraph3DWebGL({ nodes, edges, positions, coordinates, showTitles, 
       if (focus !== lastFocus) {
         lastFocus = focus;
         try {
-          engineRebuildData(engine, nodes, edges, coordinates, positionsToColors(positions), focus);
+          // #62: hover/selection only needs style + edge-color refresh.
+          engineUpdateFocus(engine, focus);
         } catch { /* keep last good frame */ }
       }
       const camera = cameraRef.current;
+      const glStart = performance.now();
       engineRender(engine, camera, scale, depthRange);
-      perfRef.current?.frame(performance.now());
+      const glMs = performance.now() - glStart;
       // Throttled benchmark data attributes for maintainer verification (#62).
       const now = performance.now();
       if (!lastBenchAttr || now - lastBenchAttr > 1000) {
@@ -416,21 +472,24 @@ function MemoryGraph3DWebGL({ nodes, edges, positions, coordinates, showTitles, 
         }
         pickPending = null;
       }
+      const labelStart = performance.now();
       drawLabels();
+      // #62: record per-render CPU cost, not the idle gap between frames.
+      perfRef.current?.frame(glMs + performance.now() - labelStart);
       canvas.dataset.rotation = `${camera.yaw.toFixed(3)},${camera.pitch.toFixed(3)}`;
     };
 
     const drawLabels = () => {
       if (!overlayCtx || !engine) return;
-      const { nodes, showTitles, selectedNodeId } = live.current;
+      const { showTitles, selectedNodeId } = live.current;
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       overlayCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
       overlayCtx.clearRect(0, 0, engine.cssWidth, engine.cssHeight);
-      if (!showTitles || nodes.length === 0) return;
+      const byId = engine.byId;
+      if (!showTitles || byId.size === 0) return;
       const camera = cameraRef.current;
       const extent = extentOf();
       const scale = Math.min(engine.cssWidth, engine.cssHeight) * 0.4 / extent;
-      const byId = new Map(nodes.map(n => [n.id, n]));
       const focus = hover ?? selectedNodeId;
       // Priority order is precomputed; project until the LOD budget is filled.
       const ordered: Array<{ id: string; label: string; type: MemoryGraphNode["type"]; isCore: boolean; degree: number; x: number; y: number }> = [];

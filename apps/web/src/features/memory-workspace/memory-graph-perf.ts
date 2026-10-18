@@ -1,8 +1,9 @@
 /**
- * Minimal frame-time harness for the 3D memory graph (#62).
+ * Minimal render-cost harness for the 3D memory graph (#62).
  *
- * Enabled with `?graphperf` in the URL. Records requestAnimationFrame deltas
- * and exposes p50/p95/max on `window.__memoryGraphPerf`, e.g.:
+ * Enabled with `?graphperf` in the URL. Records the CPU cost of each render
+ * (not the idle gap between frames) and exposes p50/p95/max on
+ * `window.__memoryGraphPerf`, e.g.:
  *
  *   open http://127.0.0.1:4911/demo-workspace?graphperf, switch Memory to 3D,
  *   rotate/zoom for a while, then read `window.__memoryGraphPerf.snapshot()`.
@@ -27,7 +28,6 @@ const percentile = (sorted: number[], q: number) =>
 
 export class GraphPerfRecorder {
   private deltas: number[] = [];
-  private last = 0;
   private renderer = "unknown";
   private nodeCount = 0;
   private edgeCount = 0;
@@ -39,12 +39,10 @@ export class GraphPerfRecorder {
     this.edgeCount = edgeCount;
   }
 
-  frame(now: number) {
-    if (this.last > 0) {
-      this.deltas.push(now - this.last);
-      if (this.deltas.length > 3600) this.deltas.shift();
-    }
-    this.last = now;
+  /** Record one render's CPU cost in ms (measured around the render body). */
+  frame(durationMs: number) {
+    this.deltas.push(durationMs);
+    if (this.deltas.length > 3600) this.deltas.shift();
   }
 
   snapshot(): GraphPerfSnapshot {
@@ -72,7 +70,6 @@ export class GraphPerfRecorder {
 
   reset() {
     this.deltas = [];
-    this.last = 0;
     this.pickDeltas = [];
   }
 }

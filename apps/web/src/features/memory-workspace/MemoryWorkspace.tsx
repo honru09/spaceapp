@@ -85,12 +85,13 @@ export function MemoryWorkspace({ shellMode, onClose, initialMode = "calendar" }
     closeDetail();
     // Search covers the entire archive; removing the month picker must not hide old memories.
     // The 3D view can opt into the full graph (up to 50,000 nodes, #62).
-    void api.memoryGraphOverview({ q: query || undefined, month: "all", relationMode: "RELATIONS", limit: fullGraph ? 50000 : undefined, syntheticSize })
+    // #62: keep the 50k graph out of the 2D path; reload when the view changes.
+    void api.memoryGraphOverview({ q: query || undefined, month: "all", relationMode: "RELATIONS", limit: view3D && fullGraph ? 50000 : undefined, syntheticSize })
       .then(payload => { if (active) setGraph(payload); })
       .catch(caught => { if (active) setError(caught instanceof Error ? caught.message : "Memory could not be loaded."); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [workspaceMode, query, fullGraph, syntheticSize, closeDetail]);
+  }, [workspaceMode, query, fullGraph, syntheticSize, view3D, closeDetail]);
 
   useEffect(() => () => { detailRequest.current++; }, []);
   const selectNode = useCallback((nodeId: string) => {

@@ -334,14 +334,18 @@ export function selectOverviewNodes(
     members.get(edge.target)!.add(edge.source);
     if (edge.origin === "EXPLICIT_TAG") explicit.add(edge.target);
   }
+  // #62: reservations and their neighbors must never exceed the requested limit.
+  const topicBudget = Math.min(Math.max(160, Math.round(160 * scale)), limit);
   const topics = nodes.filter(node => members.has(node.id)).sort((a, b) =>
     Number(explicit.has(b.id)) - Number(explicit.has(a.id)) ||
     members.get(b.id)!.size - members.get(a.id)!.size || a.id.localeCompare(b.id)
-  ).slice(0, Math.max(160, Math.round(160 * scale)));
-  const sources = nodes.filter(node => node.type === "SOURCE").sort((a, b) => Number(isMemoryCoreFile(b.label)) - Number(isMemoryCoreFile(a.label)) || a.id.localeCompare(b.id)).slice(0, Math.max(120, Math.round(120 * scale)));
+  ).slice(0, topicBudget);
+  const sourceBudget = Math.min(Math.max(120, Math.round(120 * scale)), Math.max(0, limit - topics.length));
+  const sources = nodes.filter(node => node.type === "SOURCE").sort((a, b) => Number(isMemoryCoreFile(b.label)) - Number(isMemoryCoreFile(a.label)) || a.id.localeCompare(b.id)).slice(0, sourceBudget);
   const selected = new Map([...sources, ...topics].map(node => [node.id, node]));
   // Give every reserved topic a real visible neighbor, even for sparse explicit tags.
   for (const topic of topics) {
+    if (selected.size >= limit) break;
     const first = [...members.get(topic.id)!].sort()[0];
     if (first) selected.set(first, byId.get(first)!);
   }

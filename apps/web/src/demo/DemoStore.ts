@@ -283,6 +283,9 @@ export class DemoStore {
   private agentMessages = new Map<string, AgentPaneSession["messages"]>();
   private agentSelectedToolIds = new Map<string, string[]>();
   private resetRedemptions = new Map<string, CodexResetCreditRedemptionResponse>();
+  // #62: last synthetic benchmark graph (?syntheticSize), for node detail lookups.
+  private syntheticNodes = new Map<string, MemoryGraphNode>();
+  private syntheticEdges: MemoryGraphEdge[] = [];
   private setupConnectionResults = initialSetupConnectionResults();
   private setupCheckRuns = new Map<string, DemoSetupCheckRunState>();
   private setupCheckSequence = 0;
@@ -741,6 +744,8 @@ export class DemoStore {
     if (query.syntheticSize && query.syntheticSize > 0) {
       const size = Math.min(100000, Math.floor(query.syntheticSize));
       const { nodes, edges } = generateSyntheticMemoryGraph(size);
+      this.syntheticNodes = new Map(nodes.map(node => [node.id, node]));
+      this.syntheticEdges = edges;
       const base = this.fixture.memoryWorkspace.graph;
       return {
         ...structuredClone(base),
@@ -1655,8 +1660,19 @@ export class DemoStore {
       case "memoryConsolidation": return Promise.resolve(structuredClone(this.fixture.memoryWorkspace.maintenanceDetail));
       case "memoryGraphNode": {
         const detail = this.fixture.memoryWorkspace.nodeDetails[roomId ?? ""];
-        if (!detail) throw new SpaceApiError("Memory node not found.", { status: 404, code: "NOT_FOUND" });
-        return Promise.resolve(structuredClone(detail));
+        if (detail) return Promise.resolve(structuredClone(detail));
+        // #62: synthetic benchmark nodes (?syntheticSize) have no fixture detail; synthesize one.
+        const synthetic = roomId ? this.syntheticNodes.get(roomId) : undefined;
+        if (synthetic) {
+          return Promise.resolve(structuredClone({
+            node: synthetic,
+            record: null,
+            relatedNodes: [],
+            relatedEdges: this.syntheticEdges.filter(edge => edge.source === roomId || edge.target === roomId),
+            issues: []
+          }));
+        }
+        throw new SpaceApiError("Memory node not found.", { status: 404, code: "NOT_FOUND" });
       }
       case "memoryChangeSets": {
         const query = (args[0] ?? {}) as { kind?: string; status?: string; sourcePath?: string; recordId?: string; issueId?: string; page?: number; pageSize?: number };
