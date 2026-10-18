@@ -16,6 +16,10 @@ export type GraphPerfSnapshot = {
   nodeCount: number;
   edgeCount: number;
   renderer: string;
+  picks: number;
+  pickP50: number;
+  pickP95: number;
+  pickMax: number;
 };
 
 const percentile = (sorted: number[], q: number) =>
@@ -27,6 +31,7 @@ export class GraphPerfRecorder {
   private renderer = "unknown";
   private nodeCount = 0;
   private edgeCount = 0;
+  private pickDeltas: number[] = [];
 
   configure(renderer: string, nodeCount: number, edgeCount: number) {
     this.renderer = renderer;
@@ -44,6 +49,7 @@ export class GraphPerfRecorder {
 
   snapshot(): GraphPerfSnapshot {
     const sorted = [...this.deltas].sort((a, b) => a - b);
+    const pickSorted = [...this.pickDeltas].sort((a, b) => a - b);
     return {
       frames: sorted.length,
       p50: percentile(sorted, 0.5),
@@ -51,13 +57,23 @@ export class GraphPerfRecorder {
       max: sorted.length ? sorted[sorted.length - 1]! : 0,
       nodeCount: this.nodeCount,
       edgeCount: this.edgeCount,
-      renderer: this.renderer
+      renderer: this.renderer,
+      picks: pickSorted.length,
+      pickP50: percentile(pickSorted, 0.5),
+      pickP95: percentile(pickSorted, 0.95),
+      pickMax: pickSorted.length ? pickSorted[pickSorted.length - 1]! : 0,
     };
+  }
+
+  pick(ms: number) {
+    this.pickDeltas.push(ms);
+    if (this.pickDeltas.length > 600) this.pickDeltas.shift();
   }
 
   reset() {
     this.deltas = [];
     this.last = 0;
+    this.pickDeltas = [];
   }
 }
 

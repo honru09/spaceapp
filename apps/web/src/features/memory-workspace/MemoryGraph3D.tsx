@@ -355,6 +355,7 @@ function MemoryGraph3DWebGL({ nodes, edges, positions, coordinates, showTitles, 
     let disposed = false;
     const pointers = new Map<number, { x: number; y: number }>();
     let dragged = false, downX = 0, downY = 0;
+    let lastBenchAttr = 0;
 
     const extentOf = () => {
       let extent = 60;
@@ -391,8 +392,21 @@ function MemoryGraph3DWebGL({ nodes, edges, positions, coordinates, showTitles, 
       const camera = cameraRef.current;
       engineRender(engine, camera, scale, depthRange);
       perfRef.current?.frame(performance.now());
+      // Throttled benchmark data attributes for maintainer verification (#62).
+      const now = performance.now();
+      if (!lastBenchAttr || now - lastBenchAttr > 1000) {
+        lastBenchAttr = now;
+        const snap = perfRef.current?.snapshot();
+        if (snap && canvas) {
+          canvas.dataset.frameP95Ms = snap.p95.toFixed(2);
+          canvas.dataset.pickP95Ms = snap.pickP95.toFixed(2);
+          canvas.dataset.renderer = snap.renderer;
+        }
+      }
       if (pickPending) {
+        const pickStart = performance.now();
         const idx = enginePick(engine, pickPending.x, pickPending.y, camera, scale, depthRange);
+        perfRef.current?.pick(performance.now() - pickStart);
         const next = idx === null ? null : engine.order[idx] ?? null;
         if (next !== hover) {
           hover = next;
@@ -479,7 +493,9 @@ function MemoryGraph3DWebGL({ nodes, edges, positions, coordinates, showTitles, 
       if (!dragged && pointers.size === 1 && engine) {
         const extent = extentOf();
         const scale = Math.min(engine.cssWidth, engine.cssHeight) * 0.4 / extent;
+        const pickStart = performance.now();
         const idx = enginePick(engine, p.x, p.y, cameraRef.current, scale, extent * 2);
+        perfRef.current?.pick(performance.now() - pickStart);
         const id = idx === null ? null : engine.order[idx] ?? null;
         if (id) live.current.onSelectNode(id);
       }

@@ -11,7 +11,7 @@ import type { MemoryCamera3D, MemoryPoint3D } from "./memory-3d.js";
  */
 
 /** Upper bound on measured+drawn labels per frame, whatever the graph size. */
-export const MAX_LABELS_3D = 250;
+export const MAX_LABELS_3D = 160;
 
 export const WEBGL_NODE_VERT = `#version 300 es
 precision highp float;
