@@ -17,6 +17,7 @@
  * same class.
  */
 import { readdir, readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
@@ -36,8 +37,11 @@ const historiesDir = fileURLToPath(new URL("./fixtures/workflow-histories/", imp
 // Type class. Work around it by converting with the same protobufjs copy
 // that @temporalio/proto used to build its types.
 function historyFromJSON(history: any): unknown {
+  // Resolve protobufjs relative to @temporalio/proto so we always get the
+  // same copy its types were built from, whether npm nests it or hoists it.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const protojson = require("@temporalio/proto/node_modules/protobufjs/ext/protojson") as {
+  const protoRequire = createRequire(require.resolve("@temporalio/proto/package.json"));
+  const protojson = protoRequire("protobufjs/ext/protojson") as {
     fromJson: (type: unknown, json: unknown, options: unknown) => unknown;
   };
   // eslint-disable-next-line @typescript-eslint/no-require-imports

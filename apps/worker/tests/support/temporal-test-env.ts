@@ -22,6 +22,7 @@
  * One env per test file: create in beforeAll, tear down in afterAll.
  */
 import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
 import { createConnection } from "node:net";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -37,13 +38,19 @@ const supportDir = fileURLToPath(new URL(".", import.meta.url));
 // apps/worker/tests/support -> repo root
 const repoRoot = resolve(supportDir, "..", "..", "..", "..");
 
-export const TEST_SERVER_BIN = join(
-  homedir(),
-  "workspace",
-  ".cache",
-  "temporal-test-server",
-  "temporal-test-server-sdk-typescript-1.24.0"
-);
+export const TEST_SERVER_BIN =
+  process.env.TEMPORAL_TEST_SERVER_BIN ??
+  join(homedir(), ".cache", "temporal-test-server", "temporal-test-server-sdk-typescript-1.24.0");
+
+function assertTestServerPresent(): void {
+  if (!existsSync(TEST_SERVER_BIN)) {
+    throw new Error(
+      `Temporal test server binary not found at ${TEST_SERVER_BIN}. ` +
+        `Download it (the same binary TestWorkflowEnvironment.createTimeSkipping() fetches) ` +
+        `and set TEMPORAL_TEST_SERVER_BIN to its path.`
+    );
+  }
+}
 
 function aliasWebpackConfig(config: { resolve?: { alias?: unknown } }) {
   config.resolve ??= {};
@@ -95,9 +102,29 @@ export async function createTemporalTestEnv(
   workflowsPath: string,
   activities: Record<string, (...args: any[]) => unknown>
 ): Promise<TemporalTestEnv> {
+  assertTestServerPresent();
   const port = 17233 + Math.floor(Math.random() * 2000);
   const server: ChildProcess = spawn(TEST_SERVER_BIN, [String(port)], { stdio: "ignore" });
-  await waitForPort(port);
+  const spawnError = new Promise<never>((_, reject) => {
+    server.once("error", (err) =>
+      reject(new Error(`Failed to start temporal test server at ${TEST_SERVER_BIN}: ${err.message}`))
+    );
+  });
+  try {
+    await Promise.race([waitForPort(port), spawnError]);
+    return await connectEnv(server, port, workflowsPath, activities);
+  } catch (error) {
+    server.kill("SIGTERM");
+    throw error;
+  }
+}
+
+async function connectEnv(
+  server: ChildProcess,
+  port: number,
+  workflowsPath: string,
+  activities: Record<string, (...args: any[]) => unknown>
+): Promise<TemporalTestEnv> {
   const address = `127.0.0.1:${port}`;
 
   const connectionOptions = { [InternalConnectionOptionsSymbol]: { supportsTestService: true } } as object;
