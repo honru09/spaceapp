@@ -1191,6 +1191,16 @@ function machineMemoryBytes(machine) {
   return memory < 1024 ** 2 ? memory * 1024 ** 2 : memory;
 }
 
+// `podman machine list` reports disk size in bytes (DiskSize); tolerate
+// GiB-style values from older podman releases.
+function machineDiskBytes(machine) {
+  const disk = Number(machine?.DiskSize ?? machine?.Disk ?? 0);
+  if (!Number.isFinite(disk) || disk <= 0) {
+    return null;
+  }
+  return disk < 1024 ** 3 ? disk * 1024 ** 3 : disk;
+}
+
 // Rootless Podman prerequisite check. Podman is never auto-installed; every
 // failure explains the exact command the user must run.
 export async function ensurePodmanAvailable({
@@ -1259,20 +1269,26 @@ export async function ensurePodmanAvailable({
     if (requirements && machine) {
       const cpus = Number(machine.CPUs ?? machine.CPUS ?? 0);
       const memoryBytes = machineMemoryBytes(machine);
+      const diskBytes = machineDiskBytes(machine);
       const requiredCpus = requirements.cpuCount;
       const requiredMemoryMiB = Math.ceil(requirements.memoryBytes / 1024 ** 2);
       const requiredDiskGiB = Math.ceil(requirements.freshDiskBytes / 1024 ** 3);
       const cpuOk = Number.isFinite(cpus) && cpus >= requiredCpus;
       const memoryOk = memoryBytes !== null && memoryBytes >= requirements.memoryBytes;
-      if (!cpuOk || !memoryOk) {
+      const diskOk = diskBytes === null || diskBytes >= requirements.freshDiskBytes;
+      if (!cpuOk || !memoryOk || !diskOk) {
         const actualCpus = Number.isFinite(cpus) ? String(cpus) : "unknown";
         const actualMemory = memoryBytes === null
           ? "unknown"
           : `${Math.ceil(memoryBytes / 1024 ** 2)} MiB`;
+        const actualDisk = diskBytes === null
+          ? "unknown"
+          : `${Math.ceil(diskBytes / 1024 ** 3)} GiB`;
         const name = machine.Name ? ` ${machine.Name}` : "";
         stderr.write(
           `The Podman machine${machine.Name ? ` "${machine.Name}"` : ""} does not meet the "${profile}" profile requirements ` +
-          `(${requiredCpus} CPUs, ${requiredMemoryMiB} MiB memory). It has ${actualCpus} CPUs and ${actualMemory} memory. ` +
+          `(${requiredCpus} CPUs, ${requiredMemoryMiB} MiB memory, ${requiredDiskGiB} GiB disk). ` +
+          `It has ${actualCpus} CPUs, ${actualMemory} memory and ${actualDisk} disk. ` +
           `Resize it with: podman machine set --cpus ${requiredCpus} --memory ${requiredMemoryMiB} --disk-size ${requiredDiskGiB}${name}, then rerun.\n`
         );
         return { code: 1, reexecuted: false };

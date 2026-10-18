@@ -161,3 +161,95 @@ test("podman and podman-compose are in the trusted command allowlist", async () 
     "podman should be a trusted command"
   );
 });
+
+test("macOS podman machine with insufficient disk is rejected with resize instructions", async () => {
+  const { ensurePodmanAvailable } = await import("../src/prerequisites.mjs");
+  const stderr = capture();
+  const machine = {
+    Name: "podman-machine-default",
+    Running: true,
+    CPUs: 4,
+    Memory: 8 * 1024 ** 3,
+    DiskSize: 2 * 1024 ** 3, // too small for small profile (6.5 GiB)
+  };
+  const execute = async (spec, io) => {
+    const args = spec.args || [];
+    if (spec.command === "podman" && args[0] === "--version") {
+      io.stdout?.write("podman version 5.2.0\n");
+      return 0;
+    }
+    if (spec.command === "podman" && args[0] === "compose") {
+      io.stdout?.write("Docker Compose version v2.30.0\n");
+      return 0;
+    }
+    if (spec.command === "podman" && args[0] === "info") {
+      io.stdout?.write(JSON.stringify({
+        version: { Version: "5.2.0" },
+        host: { security: { rootless: true }, cgroupVersion: "v2", cgroupControllers: ["cpu", "memory"] },
+      }));
+      return 0;
+    }
+    if (spec.command === "podman" && args[0] === "machine" && args[1] === "list") {
+      io.stdout?.write(JSON.stringify([machine]));
+      return 0;
+    }
+    return 0;
+  };
+  const result = await ensurePodmanAvailable({
+    execute,
+    platform: "darwin",
+    stdout: capture().stream,
+    stderr: stderr.stream,
+    stdin: ttyStdin(),
+    profile: "small",
+  });
+  assert.equal(result.code, 1);
+  assert.match(stderr.value(), /does not meet.*small.*profile requirements/);
+  assert.match(stderr.value(), /disk/i);
+  assert.match(stderr.value(), /podman machine set/);
+});
+
+test("macOS podman machine with sufficient disk passes the sizing check", async () => {
+  const { ensurePodmanAvailable } = await import("../src/prerequisites.mjs");
+  const stderr = capture();
+  const machine = {
+    Name: "podman-machine-default",
+    Running: true,
+    CPUs: 4,
+    Memory: 8 * 1024 ** 3,
+    DiskSize: 20 * 1024 ** 3,
+  };
+  const execute = async (spec, io) => {
+    const args = spec.args || [];
+    if (spec.command === "podman" && args[0] === "--version") {
+      io.stdout?.write("podman version 5.2.0\n");
+      return 0;
+    }
+    if (spec.command === "podman" && args[0] === "compose") {
+      io.stdout?.write("Docker Compose version v2.30.0\n");
+      return 0;
+    }
+    if (spec.command === "podman" && args[0] === "info") {
+      io.stdout?.write(JSON.stringify({
+        version: { Version: "5.2.0" },
+        host: { security: { rootless: true }, cgroupVersion: "v2", cgroupControllers: ["cpu", "memory"] },
+      }));
+      return 0;
+    }
+    if (spec.command === "podman" && args[0] === "machine" && args[1] === "list") {
+      io.stdout?.write(JSON.stringify([machine]));
+      return 0;
+    }
+    return 0;
+  };
+  const result = await ensurePodmanAvailable({
+    execute,
+    platform: "darwin",
+    stdout: capture().stream,
+    stderr: stderr.stream,
+    stdin: ttyStdin(),
+    profile: "small",
+  });
+  // Should not fail on the machine sizing check (may proceed or fail later, but not on disk).
+  assert.ok(!/does not meet.*profile requirements/.test(stderr.value()));
+});
