@@ -20,7 +20,7 @@
 //   node_modules/.package-lock.json
 //   <target extras>               (owner/backup scripts, legal files, agent-skills)
 
-import { copyFile, cp, lstat, mkdir, readFile, readlink, rm, symlink } from "node:fs/promises";
+import { copyFile, cp, lstat, mkdir, readFile, readlink, realpath, rm, symlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
@@ -140,7 +140,11 @@ function computeClosure(packages, target) {
   const collectDependencies = (fromKey, entry) => {
     const dependencies = {
       ...(entry.dependencies ?? {}),
-      ...(entry.optionalDependencies ?? {})
+      ...(entry.optionalDependencies ?? {}),
+      // Required peer deps are installed by npm alongside the package (e.g.
+      // graphology-types, required by graphology via peerDependencies). Without
+      // this the closure silently drops them and the pruned image breaks.
+      ...(entry.peerDependencies ?? {})
     };
     for (const name of Object.keys(dependencies)) {
       const key = resolveDependency(packages, fromKey, name);
@@ -177,10 +181,9 @@ function computeClosure(packages, target) {
     addWorkspace(workspace);
   }
 
-  // Peer dependencies never pull new packages: a peer is only satisfied when it
-  // already resolved into the closure (npm auto-installed it or a real
-  // dependency brought it). Nothing to add here; the pass exists to make the
-  // rule explicit.
+  // Peer dependencies are followed in collectDependencies above: npm installs
+  // required peers next to the package, so they are part of the runtime
+  // closure. Unmet peers simply don't resolve and are skipped.
   return { nodeModulesKeys, workspaceDirs };
 }
 
@@ -191,6 +194,29 @@ function assertSafeOut(root, outRoot) {
   const outFromRoot = relative(root, outRoot);
   if (outFromRoot !== "" && !outFromRoot.startsWith("..") && !isAbsolute(outFromRoot)) {
     fail(`--out ${outRoot} must be outside the source tree (${root})`);
+  }
+}
+
+async function assertSafeOutResolved(root, outRoot) {
+  // A lexical check can pass while an existing parent of --out is a symlink
+  // into the source tree; rm(outRoot, { recursive: true }) would then delete
+  // source files. Resolve the longest existing prefix before validating.
+  let probe = outRoot;
+  for (;;) {
+    try {
+      await lstat(probe);
+      break;
+    } catch {
+      const parent = dirname(probe);
+      if (parent === probe) break;
+      probe = parent;
+    }
+  }
+  const realRoot = await realpath(root).catch(() => root);
+  const realProbe = await realpath(probe).catch(() => probe);
+  const rel = relative(realRoot, realProbe);
+  if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))) {
+    fail(`--out ${outRoot} resolves inside the source tree (${root})`);
   }
 }
 
@@ -248,6 +274,7 @@ async function main() {
   const root = resolve(process.cwd());
   const outRoot = resolve(out);
   assertSafeOut(root, outRoot);
+  await assertSafeOutResolved(root, outRoot);
 
   const lock = JSON.parse(await readFile(join(root, "package-lock.json"), "utf8"));
   const packages = lock.packages ?? {};
