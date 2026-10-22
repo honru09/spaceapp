@@ -704,12 +704,19 @@ export function renderWorkspaceCompose(config, { cliSandbox = false } = {}) {
   // "user enable": accounts are on, and the core starts a USER's CLIs only in that user's own container.
   const users = config.users;
   const settings = profileRuntimeSettings(config.profile);
-  const bind = (workspace) => [
-    "      - type: bind",
-    `        source: ${JSON.stringify(workspace.hostPath)}`,
-    `        target: ${JSON.stringify(workspace.containerPath)}`,
-    `        read_only: ${workspace.readOnly}`
-  ];
+  const bind = (workspace) => {
+    if (engine === "podman") {
+      // Same SELinux label rule as the shared mounts above.
+      const label = workspace.readOnly ? ":ro,z" : ":z";
+      return [`      - ${JSON.stringify(`${workspace.hostPath}:${workspace.containerPath}${label}`)}`];
+    }
+    return [
+      "      - type: bind",
+      `        source: ${JSON.stringify(workspace.hostPath)}`,
+      `        target: ${JSON.stringify(workspace.containerPath)}`,
+      `        read_only: ${workspace.readOnly}`
+    ];
+  };
   const userServices = users.flatMap((user) => {
     const slug = userSlug(user.id);
     return [

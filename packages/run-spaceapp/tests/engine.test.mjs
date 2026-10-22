@@ -315,6 +315,18 @@ test("renderWorkspaceCompose emits SELinux :z mounts for podman", () => {
   assert.match(compose, /- "\/home\/alice\/notes:\/workspaces\/notes:ro,z"/);
 });
 
+test("renderWorkspaceCompose emits SELinux :z mounts for podman user workspaces", () => {
+  const compose = renderWorkspaceCompose({
+    ...baseConfig,
+    engine: "podman",
+    users: [{ id: "user:Bob12345", workspaces: baseConfig.workspaces }]
+  });
+  const userService = compose.slice(compose.indexOf("spaceapp-cli-"));
+  assert.match(userService, /- "\/home\/alice\/project:\/workspaces\/project:z"/);
+  assert.match(userService, /- "\/home\/alice\/notes:\/workspaces\/notes:ro,z"/);
+  assert.doesNotMatch(userService, /type: bind/);
+});
+
 test("engineInstallHelp is per-platform and never auto-installs podman", () => {
   assert.match(engineInstallHelp("docker", "linux"), /Docker Engine and Compose automatically/);
   assert.match(engineInstallHelp("podman", "darwin"), /brew install podman/);

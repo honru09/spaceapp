@@ -106,15 +106,19 @@ export async function inspectStoragePlan({ root, config, existingConfig, resourc
   let info = null;
   try {
     const parsed = JSON.parse(rawInfo);
-    // Normalize podman info JSON to the docker field names used below.
-    info = engine === "podman"
-      ? {
-          DockerRootDir: parsed?.store?.graphRoot,
-          NCPU: parsed?.host?.cpus,
-          MemTotal: parsed?.host?.memTotal,
-          Architecture: parsed?.host?.arch
-        }
-      : parsed;
+    // A failed probe parses as null; keep info null so callers take the
+    // conservative path instead of reading fields off an empty object.
+    if (parsed) {
+      // Normalize podman info JSON to the docker field names used below.
+      info = engine === "podman"
+        ? {
+            DockerRootDir: parsed.store?.graphRoot,
+            NCPU: parsed.host?.cpus,
+            MemTotal: parsed.host?.memTotal,
+            Architecture: parsed.host?.arch
+          }
+        : parsed;
+    }
   } catch { /* Conservative reserve when the engine is unavailable. */ }
   const cachedLayers = new Set();
   if (engine && existingConfig) {
