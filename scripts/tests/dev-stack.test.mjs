@@ -14,6 +14,7 @@ import {
   devStackChildProcessEnv,
   devStackPortMappings,
   parseComposeServiceImage,
+  parseOpencodePackage,
   parseOpencodeVersion,
   resolveDevStackPorts,
 } from "../dev-stack-config.mjs";
@@ -148,7 +149,7 @@ describe("parseOpencodeVersion", () => {
 
   it("parses the version from the real repo Dockerfile", () => {
     const dockerfile = readFileSync(DOCKERFILE_PATH, "utf8");
-    assert.equal(parseOpencodeVersion(dockerfile), "1.18.4");
+    assert.equal(parseOpencodeVersion(dockerfile), "2.0.32");
   });
 
   it("supports prerelease suffixes", () => {
@@ -158,6 +159,29 @@ describe("parseOpencodeVersion", () => {
   it("returns null when no opencode-ai reference exists", () => {
     assert.equal(parseOpencodeVersion("RUN echo hello"), null);
     assert.equal(parseOpencodeVersion(""), null);
+  });
+});
+
+describe("parseOpencodePackage", () => {
+  it("parses the OpenCode 2 package spec", () => {
+    const text = "RUN npm install --global --no-audit --no-fund @opencode/cli@2.0.32";
+    assert.equal(parseOpencodePackage(text), "@opencode/cli@2.0.32");
+    assert.equal(parseOpencodeVersion(text), "2.0.32");
+  });
+
+  it("parses the legacy opencode-ai package spec", () => {
+    const text = "RUN npm install --global --no-audit --no-fund opencode-ai@1.18.4";
+    assert.equal(parseOpencodePackage(text), "opencode-ai@1.18.4");
+  });
+
+  it("parses the package pinned in the real repo Dockerfile", () => {
+    const dockerfile = readFileSync(DOCKERFILE_PATH, "utf8");
+    assert.equal(parseOpencodePackage(dockerfile), "@opencode/cli@2.0.32");
+  });
+
+  it("returns null when no OpenCode CLI package is pinned", () => {
+    assert.equal(parseOpencodePackage("RUN echo hello"), null);
+    assert.equal(parseOpencodePackage(""), null);
   });
 });
 

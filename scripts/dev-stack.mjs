@@ -42,7 +42,7 @@ import {
   DEV_STACK_STATE_DIR, DEV_STACK_PROJECT_NAME, DEV_STACK_BIND_HOST,
   DEV_STACK_POSTGRES_IMAGE, DEV_STACK_TEMPORAL_IMAGE,
   resolveDevStackPorts, buildDevStackComposeYaml,
-  parseComposeServiceImage, parseOpencodeVersion,
+  parseComposeServiceImage, parseOpencodePackage,
   devStackChildProcessEnv,
 } from "./dev-stack-config.mjs";
 
@@ -483,9 +483,9 @@ async function up() {
       fail(`${which} image in ${TEMPLATE_COMPOSE_PATH} (${actualImage ?? "missing"}) does not match the digest-pinned constant; refusing to start`);
     }
   }
-  const opencodeVersion = parseOpencodeVersion(await readFile(REPO_DOCKERFILE_PATH, "utf8"));
-  if (!opencodeVersion) {
-    fail(`could not parse the opencode-ai version from ${REPO_DOCKERFILE_PATH}; refusing to start`);
+  const opencodePackage = parseOpencodePackage(await readFile(REPO_DOCKERFILE_PATH, "utf8"));
+  if (!opencodePackage) {
+    fail(`could not parse the pinned OpenCode CLI package from ${REPO_DOCKERFILE_PATH}; refusing to start`);
   }
 
   // 4. State directories.
@@ -519,7 +519,7 @@ async function up() {
   // 9. Vendored OpenCode CLI.
   const opencodeBin = join(STATE_DIR, "vendor", "opencode", "node_modules", ".bin", "opencode");
   if (!existsSync(opencodeBin)) {
-    log(`installing opencode-ai@${opencodeVersion} into ${join(STATE_DIR, "vendor", "opencode")}...`);
+    log(`installing ${opencodePackage} into ${join(STATE_DIR, "vendor", "opencode")}...`);
     await run(
       "npm",
       [
@@ -527,7 +527,7 @@ async function up() {
         "--prefix", join(STATE_DIR, "vendor", "opencode"),
         "--no-audit",
         "--no-fund",
-        `opencode-ai@${opencodeVersion}`,
+        opencodePackage,
       ],
       { cwd: REPO_ROOT },
     );

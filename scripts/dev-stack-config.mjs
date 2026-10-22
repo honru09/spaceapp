@@ -139,9 +139,20 @@ export function parseComposeServiceImage(composeText, serviceName) {
   return null;
 }
 
+// The Dockerfile pins the OpenCode CLI as an npm package spec. OpenCode 2
+// ships as @opencode/cli; older pins used the opencode-ai package. Accept
+// either so the dev stack always installs exactly what the Dockerfile pins.
+const OPENCODE_PACKAGE_PATTERN =
+  /(@opencode\/cli|opencode-ai)@([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?)/;
+
+export function parseOpencodePackage(dockerfileText) {
+  const match = OPENCODE_PACKAGE_PATTERN.exec(dockerfileText);
+  return match ? `${match[1]}@${match[2]}` : null;
+}
+
 export function parseOpencodeVersion(dockerfileText) {
-  const match = /opencode-ai@([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?)/.exec(dockerfileText);
-  return match ? match[1] : null;
+  const match = OPENCODE_PACKAGE_PATTERN.exec(dockerfileText);
+  return match ? match[2] : null;
 }
 
 export function devStackChildProcessEnv(ports) {
